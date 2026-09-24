@@ -3,7 +3,8 @@
 依次执行：
 1. 代码测试（pytest 单元测试，含随机暴力交叉验证）；
 2. 构建检查（语法编译、模块导入、镜像内关键文件齐备）；
-3. API/HTTP 冒烟（健康路径 + 嵌套同优、交叉低价诱饵、空候选、非法引用四类场景）。
+3. API/HTTP 冒烟（健康路径 + 嵌套同优、交叉低价诱饵、局部零残差与完整覆盖
+   冲突、空候选、非法引用等场景）。
 
 任一步失败即以非零退出码结束，全部通过退出码 0。
 """
@@ -155,7 +156,33 @@ def run_smoke() -> None:
     )
     check(ok, "交叉低价诱饵不被接受", f"HTTP {status} {body}")
 
-    # 场景 3：合法空候选 —— 唯一空方案。
+    # 场景 3：局部零残差与完整覆盖冲突 —— 两条零残差配对合计只覆盖 4 个
+    # 击中，三条相邻配对（各残差 50）覆盖全部 6 个；首要目标是最大化
+    # 已配对击中数，必须返回满覆盖方案。
+    payload = {
+        "hits": hits(6),
+        "candidates": [
+            cand("zero_a", 1, 2, 0),
+            cand("zero_b", 3, 4, 0),
+            cand("adj_0", 0, 1, 50),
+            cand("adj_1", 2, 3, 50),
+            cand("adj_2", 4, 5, 50),
+        ],
+    }
+    status, body = http_request("POST", "/audit", payload)
+    ok = (
+        status == 200
+        and body["paired_hits"] == 6
+        and body["total_residual"] == 150
+        and body["optimal_count"] == "1"
+        and [p["id"] for p in body["canonical_pairs"]] == ["adj_0", "adj_1", "adj_2"]
+        and body["unmatched_hits"] == []
+        and body["classification"]["required"] == ["adj_0", "adj_1", "adj_2"]
+        and set(body["classification"]["never"]) == {"zero_a", "zero_b"}
+    )
+    check(ok, "局部零残差不敌完整覆盖（首要目标为已配对击中数）", f"HTTP {status} {body}")
+
+    # 场景 4：合法空候选 —— 唯一空方案。
     payload = {"hits": hits(4), "candidates": []}
     status, body = http_request("POST", "/audit", payload)
     ok = (
@@ -167,7 +194,7 @@ def run_smoke() -> None:
     )
     check(ok, "合法空候选返回唯一空方案", f"HTTP {status} {body}")
 
-    # 场景 4：非法引用 —— 错误带字段路径，且不夹带任何审计字段。
+    # 场景 5：非法引用 —— 错误带字段路径，且不夹带任何审计字段。
     payload = {"hits": hits(4), "candidates": [cand("bad", 0, 99, 0)]}
     # 99 不在 id 中，手工构造以模拟未知端点字符串。
     payload["candidates"][0]["right_endpoint"] = "h99"

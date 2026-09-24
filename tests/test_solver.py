@@ -89,6 +89,52 @@ def test_crossing_pairs_excluded_cheap_bait():
     assert res["classification"]["required"] == ["seq01", "seq23", "tail"]
 
 
+def test_full_coverage_beats_local_zero_residual_pairs():
+    # 局部低残差与完整覆盖冲突：两条互不相交的零残差配对合计只覆盖 4 个
+    # 击中，三条相邻配对（各残差 50）合计覆盖全部 6 个击中。首要目标是
+    # 最大化已配对击中数，必须放弃零残差诱饵、选满覆盖方案。
+    hits = make_hits(6)
+    candidates = [
+        cand("zero_a", "h1", "h2", 0),
+        cand("zero_b", "h3", "h4", 0),
+        cand("adj_0", "h0", "h1", 50),
+        cand("adj_1", "h2", "h3", 50),
+        cand("adj_2", "h4", "h5", 50),
+    ]
+    res = audit({"hits": hits, "candidates": candidates})
+
+    # 汇总：6 个已配对击中、总残差 150、唯一最优方案。
+    assert res["paired_hits"] == 6
+    assert res["total_residual"] == 150
+    assert res["optimal_count"] == "1"
+
+    # 规范配对为三条相邻候选，无未配对击中。
+    assert [p["id"] for p in res["canonical_pairs"]] == ["adj_0", "adj_1", "adj_2"]
+    assert res["unmatched_hits"] == []
+
+    # 分类：三条相邻候选均为必选，两条零残差候选从不出现。
+    cls = res["classification"]
+    assert cls["required"] == ["adj_0", "adj_1", "adj_2"]
+    assert cls["optional"] == []
+    assert cls["never"] == ["zero_a", "zero_b"]
+
+    # 汇总、规范配对、未配对击中与分类可相互复算。
+    assert res["paired_hits"] == 2 * len(res["canonical_pairs"])
+    assert res["total_residual"] == sum(p["residual"] for p in res["canonical_pairs"])
+    covered = {
+        ep
+        for pair in res["canonical_pairs"]
+        for ep in (pair["left_endpoint"], pair["right_endpoint"])
+    }
+    assert len(covered) == res["paired_hits"]
+    assert res["unmatched_hits"] == [h["id"] for h in hits if h["id"] not in covered]
+    all_ids = sorted(c["id"] for c in candidates)
+    assert sorted(cls["required"] + cls["optional"] + cls["never"]) == all_ids
+    # 方案数唯一时，规范配对的 id 集合必然恰为全部必选候选。
+    assert res["optimal_count"] == "1"
+    assert sorted(p["id"] for p in res["canonical_pairs"]) == cls["required"]
+
+
 def test_residual_breaks_tie():
     hits = make_hits(4)
     candidates = [

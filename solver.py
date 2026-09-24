@@ -10,13 +10,14 @@
 
 算法采用区间 inside DP（求最优目标、方案数、规范序列）与 outside DP
 （inside-outside，统计每条候选对出现在多少个最优方案中）。
+区间最优值以二元组 (对数, 残差总和取负) 按字典序比较，直接承载两级目标；
+字典序在分量平移下保持顺序，故子区间各自最优即可合成全局最优。
 所有计数使用 Python 任意精度整数；区间 DP 复杂度 O(n*|C| + n^3)，
 n <= 180、|C| <= 4000。
 """
 
 from __future__ import annotations
 
-from fractions import Fraction
 from typing import Any, Optional
 
 MIN_HITS = 4
@@ -187,13 +188,19 @@ def audit(payload: Any) -> dict[str, Any]:
         arcs[a].append((b, r, cid))
 
     # ---------- inside 区间 DP ----------
-    # Q[i][j]/W[i][j]：区间 [i,j) 上的累计分数、最优方案数。
-    Q = [[Fraction(0) for _ in range(n + 1)] for _ in range(n + 1)]
+    # Q[i][j]：区间 [i,j) 的最优值，二元组 (对数, 残差总和取负)，字典序比较
+    # 即先最大化已配对击中数、再最小化残差总和；W[i][j]：最优方案数。
+    Q = [[(0, 0)] * (n + 1) for _ in range(n + 1)]
     W = [[0] * (n + 1) for _ in range(n + 1)]
     for i in range(n + 1):
         W[i][i] = 1
 
-    def take(quality: Fraction, ways: int, sequence: Optional[list[str]]) -> None:
+    def pair_value(a: int, b: int, r: int, m: int) -> tuple[int, int]:
+        """弧 (a,b)（残差 r）作为区间 [a,m) 首步配对规则时的合成值。"""
+        inner, outer = Q[a + 1][b], Q[b + 1][m]
+        return (1 + inner[0] + outer[0], -r + inner[1] + outer[1])
+
+    def take(quality: tuple[int, int], ways: int, sequence: Optional[list[str]]) -> None:
         """把一条规则的结果并入当前区间的最优值。"""
         if ways == 0:
             return
@@ -226,9 +233,8 @@ def audit(payload: Any) -> dict[str, Any]:
             for k, r, cid in arcs[i]:
                 if k >= j:
                     continue
-                quality = Fraction(1, r + 1)
                 take(
-                    quality + Q[i + 1][k] + Q[k + 1][j],
+                    pair_value(i, k, r, j),
                     W[i + 1][k] * W[k + 1][j],
                     [cid] + seq[i + 1][k] + seq[k + 1][j],
                 )
@@ -245,10 +251,7 @@ def audit(payload: Any) -> dict[str, Any]:
                 for k, r, cid in arcs[i]:
                     if k >= j:
                         continue
-                    if (
-                        Fraction(1, r + 1) + Q[i + 1][k] + Q[k + 1][j]
-                        == Q[i][j]
-                    ):
+                    if pair_value(i, k, r, j) == Q[i][j]:
                         candidate = [cid] + seq[i + 1][k] + seq[k + 1][j]  # type: ignore[operator]
                         if candidate == best[2]:
                             chosen = ("p", k, cid)
@@ -275,10 +278,7 @@ def audit(payload: Any) -> dict[str, Any]:
             for k, r, _cid in arcs[h]:
                 if k >= m:
                     continue
-                if (
-                    Fraction(1, r + 1) + Q[h + 1][k] + Q[k + 1][m]
-                    == Q[h][m]
-                ):
+                if pair_value(h, k, r, m) == Q[h][m]:
                     Out[h + 1][k] += outside * W[k + 1][m]
                     Out[k + 1][m] += outside * W[h + 1][k]
 
@@ -290,10 +290,7 @@ def audit(payload: Any) -> dict[str, Any]:
         count = 0
         interior_ways = W[a + 1][b]
         for m in range(b + 1, n + 1):
-            if (
-                Fraction(1, r + 1) + Q[a + 1][b] + Q[b + 1][m]
-                == Q[a][m]
-            ):
+            if pair_value(a, b, r, m) == Q[a][m]:
                 count += Out[a][m] * interior_ways * W[b + 1][m]
         used_count[cid] = count
 

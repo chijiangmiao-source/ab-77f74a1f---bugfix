@@ -3,7 +3,8 @@
 依次执行：
 1. 代码测试（pytest 单元测试，含随机暴力交叉验证）；
 2. 构建检查（语法编译、模块导入、镜像内关键文件齐备）；
-3. API/HTTP 冒烟（健康路径 + 嵌套同优、交叉低价诱饵、空候选、非法引用四类场景）。
+3. API/HTTP 冒烟（健康路径 + 嵌套同优、交叉低价诱饵、局部低残差与完整覆盖
+   冲突、空候选、非法引用五类场景）。
 
 任一步失败即以非零退出码结束，全部通过退出码 0。
 """
@@ -154,6 +155,41 @@ def run_smoke() -> None:
         and body["total_residual"] == 3
     )
     check(ok, "交叉低价诱饵不被接受", f"HTTP {status} {body}")
+
+    # 场景 2b：局部 0 残差与完整覆盖冲突 —— 两条不相交 0 残差对只覆盖
+    # 4 个击中，三条相邻对（各残差 50）覆盖全部 6 个；必须先保覆盖。
+    payload = {
+        "hits": hits(6),
+        "candidates": [
+            cand("zero_left", 0, 2, 0),
+            cand("zero_right", 3, 5, 0),
+            cand("adj01", 0, 1, 50),
+            cand("adj23", 2, 3, 50),
+            cand("adj45", 4, 5, 50),
+        ],
+    }
+    status, body = http_request("POST", "/audit", payload)
+    pair_ids = [p["id"] for p in body.get("canonical_pairs", [])]
+    endpoints = {
+        e for p in body.get("canonical_pairs", [])
+        for e in (p["left_endpoint"], p["right_endpoint"])
+    }
+    cls = body.get("classification", {})
+    ok = (
+        status == 200
+        and body.get("optimal_count") == "1"
+        and body.get("paired_hits") == 6
+        and body.get("total_residual") == 150
+        and pair_ids == ["adj01", "adj23", "adj45"]
+        and sum(p["residual"] for p in body["canonical_pairs"])
+        == body["total_residual"]
+        and body.get("unmatched_hits") == []
+        and set(cls.get("required", [])) == {"adj01", "adj23", "adj45"}
+        and cls.get("optional") == []
+        and set(cls.get("never", [])) == {"zero_left", "zero_right"}
+        and len(endpoints) == 6
+    )
+    check(ok, "局部低残差与完整覆盖冲突时完整覆盖优先", f"HTTP {status} {body}")
 
     # 场景 3：合法空候选 —— 唯一空方案。
     payload = {"hits": hits(4), "candidates": []}

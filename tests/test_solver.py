@@ -89,6 +89,57 @@ def test_crossing_pairs_excluded_cheap_bait():
     assert res["classification"]["required"] == ["seq01", "seq23", "tail"]
 
 
+def test_local_zero_residual_vs_full_coverage_conflict():
+    # 6 个连续递增击中：两条互不相交的 0 残差对合计只覆盖 4 个击中；
+    # 三条相邻对（各残差 50）可覆盖全部 6 个击中。首要目标是覆盖击中数，
+    # 局部低残差组合不得胜出。
+    hits = make_hits(6)
+    zero_pairs = [
+        cand("zero_left", "h0", "h2", 0),
+        cand("zero_right", "h3", "h5", 0),
+    ]
+    adjacent = [
+        cand("adj01", "h0", "h1", 50),
+        cand("adj23", "h2", "h3", 50),
+        cand("adj45", "h4", "h5", 50),
+    ]
+    candidates = zero_pairs + adjacent
+    res = audit({"hits": hits, "candidates": candidates})
+
+    # 首要目标：6 个击中全部配对；唯一最优方案为三条相邻对，残差总和 150。
+    assert res["paired_hits"] == 6
+    assert res["total_residual"] == 150
+    assert res["optimal_count"] == "1"
+    assert [p["id"] for p in res["canonical_pairs"]] == ["adj01", "adj23", "adj45"]
+    assert res["unmatched_hits"] == []
+    assert res["classification"]["required"] == ["adj01", "adj23", "adj45"]
+    assert res["classification"]["optional"] == []
+    assert set(res["classification"]["never"]) == {"zero_left", "zero_right"}
+
+    # 汇总、规范配对、未配对击中、分类之间可相互复算。
+    pairs = res["canonical_pairs"]
+    assert res["paired_hits"] == 2 * len(pairs)
+    assert res["total_residual"] == sum(p["residual"] for p in pairs)
+    endpoints = {e for p in pairs for e in (p["left_endpoint"], p["right_endpoint"])}
+    assert len(endpoints) == 2 * len(pairs)  # 规范方案端点互异
+    assert set(res["unmatched_hits"]) == {h["id"] for h in hits} - endpoints
+
+    cls = res["classification"]
+    all_ids = {c["id"] for c in candidates}
+    classified = set(cls["required"]) | set(cls["optional"]) | set(cls["never"])
+    assert classified == all_ids  # 每条候选恰好归入一类
+    # 唯一最优方案：规范方案中的对必选，其余从不出现。
+    assert set(cls["required"]) == {p["id"] for p in pairs}
+
+    # 与暴力枚举参考实现完全一致。
+    ids = [f"h{k}" for k in range(6)]
+    ref = brute_solve(6, to_arc_records(candidates, ids))
+    assert (ref["optimal_count"], ref["max_pairs"], ref["min_cost"]) == (1, 3, 150)
+    assert ref["canonical"] == ["adj01", "adj23", "adj45"]
+    assert ref["canonical_unmatched"] == []
+    assert cls == ref["classification"]
+
+
 def test_residual_breaks_tie():
     hits = make_hits(4)
     candidates = [

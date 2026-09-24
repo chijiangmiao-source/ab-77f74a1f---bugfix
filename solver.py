@@ -16,7 +16,6 @@ n <= 180、|C| <= 4000。
 
 from __future__ import annotations
 
-from fractions import Fraction
 from typing import Any, Optional
 
 MIN_HITS = 4
@@ -187,21 +186,26 @@ def audit(payload: Any) -> dict[str, Any]:
         arcs[a].append((b, r, cid))
 
     # ---------- inside 区间 DP ----------
-    # Q[i][j]/W[i][j]：区间 [i,j) 上的累计分数、最优方案数。
-    Q = [[Fraction(0) for _ in range(n + 1)] for _ in range(n + 1)]
+    # 分数 score=(配对数, -残差总和)，按字典序越大越优：先最大化配对数
+    # （已配对击中数 = 配对数 * 2，首要目标），配对数相同时最小化残差总和。
+    # S[i][j]：区间 [i,j) 上的最优分数；W[i][j]：最优方案数。
+    zero_score = (0, 0)
+    S = [[zero_score for _ in range(n + 1)] for _ in range(n + 1)]
     W = [[0] * (n + 1) for _ in range(n + 1)]
     for i in range(n + 1):
         W[i][i] = 1
 
-    def take(quality: Fraction, ways: int, sequence: Optional[list[str]]) -> None:
+    def combine(
+        score: tuple[int, int], ways: int, sequence: Optional[list[str]]
+    ) -> None:
         """把一条规则的结果并入当前区间的最优值。"""
         if ways == 0:
             return
-        if best[0] is None or quality > best[0]:
-            best[0] = quality
+        if best[0] is None or score > best[0]:
+            best[0] = score
             best[1] = ways
             best[2] = sequence
-        elif quality == best[0]:
+        elif score == best[0]:
             best[1] += ways
             if sequence is not None and (best[2] is None or sequence < best[2]):
                 best[2] = sequence
@@ -218,37 +222,38 @@ def audit(payload: Any) -> dict[str, Any]:
     for length in range(1, n + 1):
         for i in range(0, n - length + 1):
             j = i + length
-            best: list[Any] = [None, 0, None]  # quality, ways, 最小序列
+            best: list[Any] = [None, 0, None]  # score, ways, 最小序列
             # 规则 1：i 未配对。
-            take(Q[i + 1][j], W[i + 1][j], seq[i + 1][j])
-            skip_quality = Q[i + 1][j]
+            combine(S[i + 1][j], W[i + 1][j], seq[i + 1][j])
             # 规则 2：i 与 k 配对，内部 [i+1,k) 与外部 [k+1,j) 独立。
             for k, r, cid in arcs[i]:
                 if k >= j:
                     continue
-                quality = Fraction(1, r + 1)
-                take(
-                    quality + Q[i + 1][k] + Q[k + 1][j],
+                p_in, neg_r_in = S[i + 1][k]
+                p_out, neg_r_out = S[k + 1][j]
+                score = (p_in + p_out + 1, neg_r_in + neg_r_out - r)
+                combine(
+                    score,
                     W[i + 1][k] * W[k + 1][j],
                     [cid] + seq[i + 1][k] + seq[k + 1][j],
                 )
 
-            Q[i][j] = best[0]
+            S[i][j] = best[0]
             W[i][j] = best[1]
             seq[i][j] = best[2]
 
             # 确定取得最小 id 序列的首步规则。
             chosen: Optional[tuple[Any, ...]] = None
-            if skip_quality == Q[i][j] and seq[i + 1][j] == best[2]:
+            if S[i + 1][j] == S[i][j] and seq[i + 1][j] == best[2]:
                 chosen = ("s",)
             else:
                 for k, r, cid in arcs[i]:
                     if k >= j:
                         continue
-                    if (
-                        Fraction(1, r + 1) + Q[i + 1][k] + Q[k + 1][j]
-                        == Q[i][j]
-                    ):
+                    p_in, neg_r_in = S[i + 1][k]
+                    p_out, neg_r_out = S[k + 1][j]
+                    score = (p_in + p_out + 1, neg_r_in + neg_r_out - r)
+                    if score == S[i][j]:
                         candidate = [cid] + seq[i + 1][k] + seq[k + 1][j]  # type: ignore[operator]
                         if candidate == best[2]:
                             chosen = ("p", k, cid)
@@ -269,16 +274,16 @@ def audit(payload: Any) -> dict[str, Any]:
             if outside == 0:
                 continue
             # 跳过规则：父 [h,m) -> 子 [h+1,m)。
-            if Q[h + 1][m] == Q[h][m]:
+            if S[h + 1][m] == S[h][m]:
                 Out[h + 1][m] += outside
             # 配对规则：父 [h,m) 经弧 (h,k) -> 左子 [h+1,k)、右子 [k+1,m)。
             for k, r, _cid in arcs[h]:
                 if k >= m:
                     continue
-                if (
-                    Fraction(1, r + 1) + Q[h + 1][k] + Q[k + 1][m]
-                    == Q[h][m]
-                ):
+                p_in, neg_r_in = S[h + 1][k]
+                p_out, neg_r_out = S[k + 1][m]
+                score = (p_in + p_out + 1, neg_r_in + neg_r_out - r)
+                if score == S[h][m]:
                     Out[h + 1][k] += outside * W[k + 1][m]
                     Out[k + 1][m] += outside * W[h + 1][k]
 
@@ -290,10 +295,10 @@ def audit(payload: Any) -> dict[str, Any]:
         count = 0
         interior_ways = W[a + 1][b]
         for m in range(b + 1, n + 1):
-            if (
-                Fraction(1, r + 1) + Q[a + 1][b] + Q[b + 1][m]
-                == Q[a][m]
-            ):
+            p_in, neg_r_in = S[a + 1][b]
+            p_out, neg_r_out = S[b + 1][m]
+            score = (p_in + p_out + 1, neg_r_in + neg_r_out - r)
+            if score == S[a][m]:
                 count += Out[a][m] * interior_ways * W[b + 1][m]
         used_count[cid] = count
 
